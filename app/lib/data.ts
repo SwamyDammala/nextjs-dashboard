@@ -158,7 +158,7 @@ export async function fetchInvoicesPages(query: string) {
   }
 }
 
-export async function fetchInvoiceById(id: string) {
+export async function fetchInvoiceById(id: string): Promise<InvoiceForm> {
   try {
     const data = await getSql()<InvoiceForm[]>`
       SELECT
@@ -176,6 +176,10 @@ export async function fetchInvoiceById(id: string) {
       amount: invoice.amount / 100,
     }));
 
+    if (!invoice[0]) {
+      throw new Error(`Invoice not found for id: ${id}`);
+    }
+
     return invoice[0];
   } catch (error) {
     console.error('Database Error:', error);
@@ -183,7 +187,7 @@ export async function fetchInvoiceById(id: string) {
   }
 }
 
-export async function fetchCustomers() {
+export async function fetchCustomers(): Promise<CustomerField[]> {
   try {
     const customers = await getSql()<CustomerField[]>`
       SELECT
@@ -196,7 +200,7 @@ export async function fetchCustomers() {
     return customers;
   } catch (err) {
     console.error('Database Error:', err);
-    throw new Error('Failed to fetch all customers.');
+    return [];
   }
 }
 
