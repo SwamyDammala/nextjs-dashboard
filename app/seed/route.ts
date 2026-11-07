@@ -1,10 +1,30 @@
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import postgres from 'postgres';
 import { invoices, customers, revenue, users } from '../lib/placeholder-data';
 
-const sql = postgres(process.env.POSTGRES_URL!, { ssl: 'require' });
+function getDatabaseUrl() {
+  console.log('POSTGRES_URL:', process.env.POSTGRES_URL);
+  return (
+    process.env.POSTGRES_URL ??
+    process.env.DATABASE_URL ??
+    process.env.POSTGRES_PRISMA_URL ??
+    ''
+  );
+}
 
-async function seedUsers() {
+function getSqlClient() {
+  const connectionString = getDatabaseUrl();
+
+  if (!connectionString) {
+    throw new Error(
+      'Missing database connection string. Add POSTGRES_URL or DATABASE_URL to your environment before seeding.',
+    );
+  }
+
+  return postgres(connectionString, { ssl: 'require' });
+}
+
+async function seedUsers(sql: ReturnType<typeof postgres>) {
   await sql`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`;
   await sql`
     CREATE TABLE IF NOT EXISTS users (
@@ -29,7 +49,7 @@ async function seedUsers() {
   return insertedUsers;
 }
 
-async function seedInvoices() {
+async function seedInvoices(sql: ReturnType<typeof postgres>) {
   await sql`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`;
 
   await sql`
@@ -55,7 +75,7 @@ async function seedInvoices() {
   return insertedInvoices;
 }
 
-async function seedCustomers() {
+async function seedCustomers(sql: ReturnType<typeof postgres>) {
   await sql`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`;
 
   await sql`
@@ -80,7 +100,7 @@ async function seedCustomers() {
   return insertedCustomers;
 }
 
-async function seedRevenue() {
+async function seedRevenue(sql: ReturnType<typeof postgres>) {
   await sql`
     CREATE TABLE IF NOT EXISTS revenue (
       month VARCHAR(4) NOT NULL UNIQUE,
@@ -103,15 +123,26 @@ async function seedRevenue() {
 
 export async function GET() {
   try {
-    const result = await sql.begin((sql) => [
-      seedUsers(),
-      seedCustomers(),
-      seedInvoices(),
-      seedRevenue(),
+    const sql = getSqlClient();
+    await sql.begin((sql) => [
+      seedUsers(sql),
+      seedCustomers(sql),
+      seedInvoices(sql),
+      seedRevenue(sql),
     ]);
 
     return Response.json({ message: 'Database seeded successfully' });
   } catch (error) {
-    return Response.json({ error }, { status: 500 });
+    const message =
+      error instanceof Error ? error.message : 'Unknown database error';
+
+    return Response.json(
+      {
+        error: 'Database seeding failed.',
+        details: message,
+        hint: 'Check the database hostname and credentials in your .env.local file.',
+      },
+      { status: 503 },
+    );
   }
 }
