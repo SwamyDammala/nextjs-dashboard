@@ -1,5 +1,10 @@
 import postgres from 'postgres';
 import {
+  customers as placeholderCustomers,
+  invoices as placeholderInvoices,
+  revenue as placeholderRevenue,
+} from './placeholder-data';
+import {
   CustomerField,
   CustomersTableType,
   InvoiceForm,
@@ -27,8 +32,91 @@ function getSql() {
   return sql;
 }
 
+function getFallbackCustomers(): CustomerField[] {
+  return placeholderCustomers.map((customer) => ({
+    id: customer.id,
+    name: customer.name,
+  }));
+}
+
+function getFallbackCustomerById(customerId: string) {
+  return placeholderCustomers.find((customer) => customer.id === customerId);
+}
+
+function getFallbackInvoice(id: string): InvoiceForm | undefined {
+  const invoice = placeholderInvoices.find((entry) => entry.customer_id === id)
+    ?? placeholderInvoices[0];
+
+  if (!invoice) {
+    return undefined;
+  }
+
+  return {
+    id: invoice.customer_id,
+    customer_id: invoice.customer_id,
+    amount: invoice.amount / 100,
+    status: invoice.status as InvoiceForm['status'],
+  };
+}
+
+function getFallbackLatestInvoices(): LatestInvoiceRaw[] {
+  return placeholderInvoices.slice(0, 5).map((invoice) => {
+    const customer = getFallbackCustomerById(invoice.customer_id);
+
+    return {
+      id: invoice.customer_id,
+      name: customer?.name ?? 'Unknown customer',
+      image_url: customer?.image_url ?? '/customers/evil-rabbit.png',
+      email: customer?.email ?? 'unknown@example.com',
+      amount: invoice.amount,
+    };
+  });
+}
+
+function getFallbackCardData() {
+  const totalPaidInvoices = placeholderInvoices
+    .filter((invoice) => invoice.status === 'paid')
+    .reduce((sum, invoice) => sum + invoice.amount, 0);
+  const totalPendingInvoices = placeholderInvoices
+    .filter((invoice) => invoice.status === 'pending')
+    .reduce((sum, invoice) => sum + invoice.amount, 0);
+
+  return {
+    numberOfCustomers: placeholderCustomers.length,
+    numberOfInvoices: placeholderInvoices.length,
+    totalPaidInvoices: formatCurrency(totalPaidInvoices),
+    totalPendingInvoices: formatCurrency(totalPendingInvoices),
+  };
+}
+
+function getFallbackFilteredInvoices(query: string) {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return placeholderInvoices.slice(0, 6);
+  }
+
+  return placeholderInvoices.filter((invoice) => {
+    const customer = getFallbackCustomerById(invoice.customer_id);
+    const haystack = [
+      customer?.name ?? '',
+      customer?.email ?? '',
+      invoice.status,
+      String(invoice.amount),
+      invoice.date,
+    ]
+      .join(' ')
+      .toLowerCase();
+
+    return haystack.includes(normalizedQuery);
+  });
+}
+
 export async function fetchRevenue() {
   try {
+    if (!connectionString) {
+      return placeholderRevenue;
+    }
+
     // Artificially delay a response for demo purposes.
     // Don't do this in production :)
 
@@ -42,12 +130,19 @@ export async function fetchRevenue() {
     return data;
   } catch (error) {
     console.error('Database Error:', error);
-    throw new Error('Failed to fetch revenue data.');
+    return placeholderRevenue;
   }
 }
 
 export async function fetchLatestInvoices() {
   try {
+    if (!connectionString) {
+      return getFallbackLatestInvoices().map((invoice) => ({
+        ...invoice,
+        amount: formatCurrency(invoice.amount),
+      }));
+    }
+
     const data = await getSql()<LatestInvoiceRaw[]>`
       SELECT invoices.amount, customers.name, customers.image_url, customers.email, invoices.id
       FROM invoices
@@ -62,12 +157,19 @@ export async function fetchLatestInvoices() {
     return latestInvoices;
   } catch (error) {
     console.error('Database Error:', error);
-    throw new Error('Failed to fetch the latest invoices.');
+    return getFallbackLatestInvoices().map((invoice) => ({
+      ...invoice,
+      amount: formatCurrency(invoice.amount),
+    }));
   }
 }
 
 export async function fetchCardData() {
   try {
+    if (!connectionString) {
+      return getFallbackCardData();
+    }
+
     // You can probably combine these into a single SQL query
     // However, we are intentionally splitting them to demonstrate
     // how to initialize multiple queries in parallel with JS.
@@ -97,7 +199,7 @@ export async function fetchCardData() {
     };
   } catch (error) {
     console.error('Database Error:', error);
-    throw new Error('Failed to fetch card data.');
+    return getFallbackCardData();
   }
 }
 
@@ -109,6 +211,25 @@ export async function fetchFilteredInvoices(
   const offset = (currentPage - 1) * ITEMS_PER_PAGE;
 
   try {
+    if (!connectionString) {
+      const fallbackInvoices = getFallbackFilteredInvoices(query)
+        .slice(offset, offset + ITEMS_PER_PAGE)
+        .map((invoice) => ({
+          id: invoice.customer_id,
+          customer_id: invoice.customer_id,
+          name: getFallbackCustomerById(invoice.customer_id)?.name ?? 'Unknown customer',
+          email: getFallbackCustomerById(invoice.customer_id)?.email ?? 'unknown@example.com',
+          image_url:
+            getFallbackCustomerById(invoice.customer_id)?.image_url ??
+            '/customers/evil-rabbit.png',
+          date: invoice.date,
+          amount: invoice.amount,
+          status: invoice.status,
+        }));
+
+      return fallbackInvoices;
+    }
+
     const invoices = await getSql()<InvoicesTable[]>`
       SELECT
         invoices.id,
@@ -133,12 +254,29 @@ export async function fetchFilteredInvoices(
     return invoices;
   } catch (error) {
     console.error('Database Error:', error);
-    throw new Error('Failed to fetch invoices.');
+    return getFallbackFilteredInvoices(query)
+      .slice(offset, offset + ITEMS_PER_PAGE)
+      .map((invoice) => ({
+        id: invoice.customer_id,
+        customer_id: invoice.customer_id,
+        name: getFallbackCustomerById(invoice.customer_id)?.name ?? 'Unknown customer',
+        email: getFallbackCustomerById(invoice.customer_id)?.email ?? 'unknown@example.com',
+        image_url:
+          getFallbackCustomerById(invoice.customer_id)?.image_url ??
+          '/customers/evil-rabbit.png',
+        date: invoice.date,
+        amount: invoice.amount,
+        status: invoice.status,
+      }));
   }
 }
 
 export async function fetchInvoicesPages(query: string) {
   try {
+    if (!connectionString) {
+      return 1;
+    }
+
     const data = await getSql()`SELECT COUNT(*)
     FROM invoices
     JOIN customers ON invoices.customer_id = customers.id
@@ -154,12 +292,20 @@ export async function fetchInvoicesPages(query: string) {
     return totalPages;
   } catch (error) {
     console.error('Database Error:', error);
-    throw new Error('Failed to fetch total number of invoices.');
+    return 1;
   }
 }
 
 export async function fetchInvoiceById(id: string): Promise<InvoiceForm> {
   try {
+    if (!connectionString) {
+      const fallbackInvoice = getFallbackInvoice(id);
+      if (!fallbackInvoice) {
+        throw new Error(`Invoice not found for id: ${id}`);
+      }
+      return fallbackInvoice;
+    }
+
     const data = await getSql()<InvoiceForm[]>`
       SELECT
         invoices.id,
@@ -183,12 +329,20 @@ export async function fetchInvoiceById(id: string): Promise<InvoiceForm> {
     return invoice[0];
   } catch (error) {
     console.error('Database Error:', error);
-    throw new Error('Failed to fetch invoice.');
+    const fallbackInvoice = getFallbackInvoice(id);
+    if (!fallbackInvoice) {
+      throw new Error('Failed to fetch invoice.');
+    }
+    return fallbackInvoice;
   }
 }
 
 export async function fetchCustomers(): Promise<CustomerField[]> {
   try {
+    if (!connectionString) {
+      return getFallbackCustomers();
+    }
+
     const customers = await getSql()<CustomerField[]>`
       SELECT
         id,
@@ -200,12 +354,28 @@ export async function fetchCustomers(): Promise<CustomerField[]> {
     return customers;
   } catch (err) {
     console.error('Database Error:', err);
-    return [];
+    return getFallbackCustomers();
   }
 }
 
 export async function fetchFilteredCustomers(query: string) {
   try {
+    if (!connectionString) {
+      const customers = getFallbackCustomers().filter((customer) => {
+        const match = `${customer.name}`.toLowerCase();
+        return match.includes(query.toLowerCase());
+      });
+
+      return customers.map((customer) => ({
+        ...customer,
+        email: placeholderCustomers.find((entry) => entry.id === customer.id)?.email ?? '',
+        image_url: placeholderCustomers.find((entry) => entry.id === customer.id)?.image_url ?? '',
+        total_invoices: 0,
+        total_pending: 0,
+        total_paid: 0,
+      }));
+    }
+
     const data = await getSql()<CustomersTableType[]>`
 		SELECT
 		  customers.id,
@@ -233,6 +403,17 @@ export async function fetchFilteredCustomers(query: string) {
     return customers;
   } catch (err) {
     console.error('Database Error:', err);
-    throw new Error('Failed to fetch customer table.');
+    const customers = getFallbackCustomers().filter((customer) =>
+      customer.name.toLowerCase().includes(query.toLowerCase()),
+    );
+
+    return customers.map((customer) => ({
+      ...customer,
+      email: placeholderCustomers.find((entry) => entry.id === customer.id)?.email ?? '',
+      image_url: placeholderCustomers.find((entry) => entry.id === customer.id)?.image_url ?? '',
+      total_invoices: 0,
+      total_pending: 0,
+      total_paid: 0,
+    }));
   }
 }
